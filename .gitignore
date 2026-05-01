@@ -1,0 +1,15 @@
+.env
+__pycache__/
+*.pyc
+*.pyo
+.streamlit/secrets.toml
+~$*
+generate_docx.py
+generate_test_image.py
+generate_test_essay.py
+test_grader.py
+test_essay_grader.py
+test_homework.png
+test_essay.png
+项目说明文档.md
+项目说明文档.docx
