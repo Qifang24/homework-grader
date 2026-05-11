@@ -9,6 +9,7 @@ from PIL import Image
 
 from grader.essay_grader import grade_essay
 from grader.math_grader import grade_math
+from grader.database import save_result, get_history, delete_record, clear_history
 
 load_dotenv()
 
@@ -193,7 +194,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ── 标签页 ───────────────────────────────────────────────
-tab_single, tab_class = st.tabs(["📄 单份批改", "👥 班级学情分析"])
+tab_single, tab_class, tab_history = st.tabs(["📄 单份批改", "👥 班级学情分析", "📚 历史记录"])
 
 
 # ═══════════════════════════════════════════════════════
@@ -399,6 +400,7 @@ with tab_single:
                 b64, mt = encode_image(uploaded_file)
                 with st.spinner("AI 正在批改中，请稍候…"):
                     result = grade_math(b64,mt) if subject=="数学" else grade_essay(b64,subject,mt)
+                save_result(uploaded_file.name, subject, result)
                 render_result(result, subject)
 
 
@@ -427,6 +429,7 @@ with tab_class:
                 progress_bar.progress((i+1)/len(uploaded_files), text=f"正在批改第 {i+1}/{len(uploaded_files)} 份…")
                 b64, mt = encode_image(f)
                 r = grade_math(b64,mt) if subject=="数学" else grade_essay(b64,subject,mt)
+                save_result(f.name, subject, r)
                 results.append(r)
                 names.append(f.name)
 
@@ -447,3 +450,44 @@ with tab_class:
                 _,emoji = show_grade_badge(grade)
                 with st.expander(f"{emoji} {name}  ·  {score}分  ·  {grade}"):
                     render_result(result, subject)
+
+
+# ═══════════════════════════════════════════════════════
+# Tab 3：历史记录
+# ═══════════════════════════════════════════════════════
+with tab_history:
+    import json as _json
+
+    records = get_history()
+
+    if not records:
+        st.info("还没有批改记录，去单份批改或班级批改试试吧。")
+    else:
+        col_info, col_clear = st.columns([3, 1])
+        with col_info:
+            st.markdown(f"共 **{len(records)}** 条记录，最新在最上方")
+        with col_clear:
+            if st.button("🗑️ 清空历史", type="secondary"):
+                clear_history()
+                st.rerun()
+
+        st.divider()
+
+        grade_color = {"优秀":"🟢","良好":"🔵","合格":"🟡","待改进":"🔴"}
+
+        for rec in records:
+            score  = rec["score"] if rec["score"] is not None else "—"
+            grade  = rec["grade"] or ""
+            dot    = grade_color.get(grade, "⚪")
+            weak   = _json.loads(rec["weak_points"]) if rec["weak_points"] else []
+            weak_str = "  ".join(f"`{w}`" for w in weak) if weak else "—"
+
+            with st.expander(
+                f"{dot} {rec['created_at']}　{rec['filename']}　{rec['subject']}　**{score} 分**　{grade}"
+            ):
+                result = _json.loads(rec["full_result"])
+                render_result(result, rec["subject"])
+                st.caption(f"记录 ID：{rec['id']}")
+                if st.button("删除此条", key=f"del_{rec['id']}"):
+                    delete_record(rec["id"])
+                    st.rerun()
