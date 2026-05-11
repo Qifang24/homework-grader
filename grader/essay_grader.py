@@ -10,8 +10,6 @@ ESSAY_PROMPT_TEMPLATE = """你是一位专业的{subject}老师，请批改这�
 
 请严格按照以下JSON格式输出，不要输出任何其他内容：
 {{
-    "score": 数字(0-100),
-    "grade": "优秀/良好/合格/待改进",
     "dimensions": {{
         "theme": {{
             "score": 数字(0-25),
@@ -38,8 +36,26 @@ ESSAY_PROMPT_TEMPLATE = """你是一位专业的{subject}老师，请批改这�
 
 批改要求：
 1. 仔细识别手写内容，包括涂改和潦草字迹
-2. 四个维度各25分，合计100分
+2. 四个维度各25分，每个维度独立打分
 3. 评语必须引用作文中的具体句子，体现个性化"""
+
+
+def _calculate_score(dimensions: dict) -> tuple[int, str]:
+    """总分 = 四维之和，等级由代码统一判断。"""
+    keys = ["theme", "structure", "language", "content"]
+    total = sum(dimensions.get(k, {}).get("score", 0) for k in keys)
+    score = min(100, max(0, total))
+
+    if score >= 90:
+        grade = "优秀"
+    elif score >= 75:
+        grade = "良好"
+    elif score >= 60:
+        grade = "合格"
+    else:
+        grade = "待改进"
+
+    return score, grade
 
 
 def grade_essay(image_b64: str, subject: str = "语文", media_type: str = "image/jpeg") -> dict:
@@ -53,9 +69,7 @@ def grade_essay(image_b64: str, subject: str = "语文", media_type: str = "imag
                 "content": [
                     {
                         "type": "image_url",
-                        "image_url": {
-                            "url": f"data:{media_type};base64,{image_b64}"
-                        },
+                        "image_url": {"url": f"data:{media_type};base64,{image_b64}"},
                     },
                     {"type": "text", "text": prompt},
                 ],
@@ -69,7 +83,7 @@ def grade_essay(image_b64: str, subject: str = "语文", media_type: str = "imag
             raw = raw.split("```json")[1].split("```")[0].strip()
         elif "```" in raw:
             raw = raw.split("```")[1].split("```")[0].strip()
-        return json.loads(raw)
+        result = json.loads(raw)
     except json.JSONDecodeError:
         return {
             "score": None,
@@ -80,3 +94,8 @@ def grade_essay(image_b64: str, subject: str = "语文", media_type: str = "imag
             "weak_points": [],
             "suggestions": "",
         }
+
+    score, grade = _calculate_score(result.get("dimensions", {}))
+    result["score"] = score
+    result["grade"] = grade
+    return result
