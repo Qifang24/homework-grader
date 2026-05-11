@@ -14,6 +14,12 @@ load_dotenv()
 
 st.set_page_config(page_title="AI作业批改系统", page_icon="📝", layout="wide")
 
+# 学科切换时重置上传器
+if "current_subject" not in st.session_state:
+    st.session_state.current_subject = None
+if "uploader_key" not in st.session_state:
+    st.session_state.uploader_key = 0
+
 st.markdown("""
 <style>
 /* ── 全局背景 ─────────────────────────────── */
@@ -170,6 +176,9 @@ hr { border-color:#e8eaf6; margin:1.2rem 0; }
 with st.sidebar:
     st.markdown("## 📚 批改设置")
     subject = st.selectbox("选择学科", ["数学", "语文作文", "英语作文"])
+    if subject != st.session_state.current_subject:
+        st.session_state.current_subject = subject
+        st.session_state.uploader_key += 1
     st.divider()
     st.markdown("**使用说明**\n1. 选择学科\n2. 选择批改模式\n3. 上传作业图片\n4. 点击开始批改")
     st.divider()
@@ -377,7 +386,7 @@ def render_class_report(report, subject):
 with tab_single:
     uploaded_file = st.file_uploader(
         "上传作业图片（支持 JPG / PNG）",
-        type=["jpg","jpeg","png"], key="single",
+        type=["jpg","jpeg","png"], key=f"single_{st.session_state.uploader_key}",
         label_visibility="collapsed",
     )
     if uploaded_file:
@@ -402,7 +411,7 @@ with tab_class:
     uploaded_files = st.file_uploader(
         "上传多份作业图片（支持批量选择）",
         type=["jpg","jpeg","png"],
-        accept_multiple_files=True, key="batch",
+        accept_multiple_files=True, key=f"batch_{st.session_state.uploader_key}",
         label_visibility="collapsed",
     )
 
