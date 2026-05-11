@@ -201,6 +201,7 @@ tab_single, tab_class, tab_history = st.tabs(["📄 单份批改", "👥 班级�
 # 工具函数
 # ═══════════════════════════════════════════════════════
 def encode_image(file):
+    file.seek(0)
     raw = file.read()
     media_type = "image/png" if file.type == "image/png" else "image/jpeg"
     return base64.standard_b64encode(raw).decode(), media_type
