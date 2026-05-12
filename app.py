@@ -429,7 +429,7 @@ with tab_class:
                 progress_bar.progress((i+1)/len(uploaded_files), text=f"正在批改第 {i+1}/{len(uploaded_files)} 份…")
                 b64, mt = encode_image(f)
                 r = grade_math(b64,mt) if subject=="数学" else grade_essay(b64,subject,mt)
-                save_result(f.name, subject, r)
+                save_result(f.name, subject, r, source="班级批改")
                 results.append(r)
                 names.append(f.name)
 
@@ -482,8 +482,10 @@ with tab_history:
             weak   = _json.loads(rec["weak_points"]) if rec["weak_points"] else []
             weak_str = "  ".join(f"`{w}`" for w in weak) if weak else "—"
 
+            source = rec.get("source", "单份批改")
+            source_tag = "👥" if source == "班级批改" else "📄"
             with st.expander(
-                f"{dot} {rec['created_at']}　{rec['filename']}　{rec['subject']}　**{score} 分**　{grade}"
+                f"{dot} {source_tag} {rec['created_at']}　{rec['filename']}　{rec['subject']}　**{score} 分**　{grade}"
             ):
                 result = _json.loads(rec["full_result"])
                 render_result(result, rec["subject"])

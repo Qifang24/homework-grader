@@ -20,25 +20,32 @@ def init_db():
                 created_at  TEXT    NOT NULL,
                 filename    TEXT    NOT NULL,
                 subject     TEXT    NOT NULL,
+                source      TEXT    NOT NULL DEFAULT '单份批改',
                 score       INTEGER,
                 grade       TEXT,
                 weak_points TEXT,
                 full_result TEXT    NOT NULL
             )
         """)
+        # 兼容旧表：若 source 列不存在则添加
+        try:
+            con.execute("ALTER TABLE history ADD COLUMN source TEXT NOT NULL DEFAULT '单份批改'")
+        except Exception:
+            pass
 
 
-def save_result(filename: str, subject: str, result: dict):
+def save_result(filename: str, subject: str, result: dict, source: str = "单份批改"):
     init_db()
     with _conn() as con:
         con.execute(
             """INSERT INTO history
-               (created_at, filename, subject, score, grade, weak_points, full_result)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+               (created_at, filename, subject, source, score, grade, weak_points, full_result)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 filename,
                 subject,
+                source,
                 result.get("score"),
                 result.get("grade"),
                 json.dumps(result.get("weak_points", []), ensure_ascii=False),
