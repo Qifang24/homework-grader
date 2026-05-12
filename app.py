@@ -2,6 +2,7 @@ import base64
 import os
 from pathlib import Path
 from collections import Counter
+from datetime import datetime
 
 import streamlit as st
 from dotenv import load_dotenv
@@ -9,7 +10,9 @@ from PIL import Image
 
 from grader.essay_grader import grade_essay
 from grader.math_grader import grade_math
-from grader.database import save_result, get_history, delete_record, clear_history
+from grader.database import (save_result, save_batch_report, get_history,
+                              get_batch_report, get_batch_records,
+                              delete_record, delete_batch, clear_history)
 
 load_dotenv()
 
@@ -423,13 +426,14 @@ with tab_class:
         if st.button("🚀 开始批量批改", type="primary", use_container_width=True, key="btn_batch"):
             results = []
             names   = []
+            batch_id = datetime.now().strftime("%Y%m%d%H%M%S")
             progress_bar = st.progress(0, text="正在批改中…")
 
             for i, f in enumerate(uploaded_files):
                 progress_bar.progress((i+1)/len(uploaded_files), text=f"正在批改第 {i+1}/{len(uploaded_files)} 份…")
                 b64, mt = encode_image(f)
                 r = grade_math(b64,mt) if subject=="数学" else grade_essay(b64,subject,mt)
-                save_result(f.name, subject, r, source="班级批改")
+                save_result(f.name, subject, r, source="班级批改", batch_id=batch_id)
                 results.append(r)
                 names.append(f.name)
 
@@ -439,6 +443,7 @@ with tab_class:
             # 班级学情报告
             report = generate_class_report(results, subject)
             if report:
+                save_batch_report(batch_id, subject, report, len(results))
                 render_class_report(report, subject)
 
             # 逐份详情（折叠）
@@ -474,22 +479,48 @@ with tab_history:
         st.divider()
 
         grade_color = {"优秀":"🟢","良好":"🔵","合格":"🟡","待改进":"🔴"}
+        shown_batches = set()
 
         for rec in records:
-            score  = rec["score"] if rec["score"] is not None else "—"
-            grade  = rec["grade"] or ""
-            dot    = grade_color.get(grade, "⚪")
-            weak   = _json.loads(rec["weak_points"]) if rec["weak_points"] else []
-            weak_str = "  ".join(f"`{w}`" for w in weak) if weak else "—"
+            source   = rec.get("source", "单份批改")
+            batch_id = rec.get("batch_id")
 
-            source = rec.get("source", "单份批改")
-            source_tag = "👥" if source == "班级批改" else "📄"
-            with st.expander(
-                f"{dot} {source_tag} {rec['created_at']}　{rec['filename']}　{rec['subject']}　**{score} 分**　{grade}"
-            ):
-                result = _json.loads(rec["full_result"])
-                render_result(result, rec["subject"])
-                st.caption(f"记录 ID：{rec['id']}")
-                if st.button("删除此条", key=f"del_{rec['id']}"):
-                    delete_record(rec["id"])
-                    st.rerun()
+            # 班级批改：按 batch_id 分组，只渲染一次
+            if source == "班级批改" and batch_id:
+                if batch_id in shown_batches:
+                    continue
+                shown_batches.add(batch_id)
+
+                batch_recs = get_batch_records(batch_id)
+                batch_rep  = get_batch_report(batch_id)
+                n          = len(batch_recs)
+                scores     = [r["score"] for r in batch_recs if r["score"] is not None]
+                avg        = round(sum(scores)/len(scores), 1) if scores else "—"
+                created_at = batch_recs[0]["created_at"] if batch_recs else rec["created_at"]
+
+                with st.expander(f"👥 {created_at}　班级批改　{rec['subject']}　共 {n} 份　平均 {avg} 分"):
+                    if batch_rep:
+                        render_class_report(batch_rep["report_json"], rec["subject"])
+                    st.divider()
+                    st.markdown("**逐份详情**")
+                    for br in batch_recs:
+                        s   = br["score"] if br["score"] is not None else "—"
+                        g   = br["grade"] or ""
+                        dot = grade_color.get(g, "⚪")
+                        with st.expander(f"{dot} {br['filename']}　{s} 分　{g}", key=f"br_{br['id']}"):
+                            render_result(_json.loads(br["full_result"]), br["subject"])
+                    if st.button("删除此次班级批改", key=f"del_batch_{batch_id}"):
+                        delete_batch(batch_id)
+                        st.rerun()
+
+            # 单份批改
+            else:
+                score = rec["score"] if rec["score"] is not None else "—"
+                grade = rec["grade"] or ""
+                dot   = grade_color.get(grade, "⚪")
+                with st.expander(f"📄 {dot} {rec['created_at']}　{rec['filename']}　{rec['subject']}　**{score} 分**　{grade}"):
+                    result = _json.loads(rec["full_result"])
+                    render_result(result, rec["subject"])
+                    if st.button("删除此条", key=f"del_{rec['id']}"):
+                        delete_record(rec["id"])
+                        st.rerun()
