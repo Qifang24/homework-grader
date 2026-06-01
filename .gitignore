@@ -2,6 +2,14 @@
 __pycache__/
 *.pyc
 *.pyo
+*.db
+.pytest_cache/
+
+# 评测数据与产物（学生作业数据不入库）
+eval/gold/labels.json
+eval/gold/images/
+eval/report.json
+eval/report.md
 .streamlit/secrets.toml
 ~$*
 generate_docx.py
