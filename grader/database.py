@@ -3,6 +3,8 @@ import json
 from datetime import datetime
 from pathlib import Path
 
+from grader._client import score_to_grade
+
 DB_PATH = Path(__file__).parent.parent / "grading_history.db"
 
 
@@ -37,18 +39,25 @@ def init_db():
                 report_json TEXT NOT NULL
             )
         """)
-        for col in ["source", "batch_id"]:
+        # 旧库平滑迁移：补齐后加的列
+        migrations = {
+            "source": "TEXT",
+            "batch_id": "TEXT",
+            "reviewed": "INTEGER DEFAULT 0",   # 是否经教师人工复核
+            "teacher_score": "INTEGER",         # 教师修正后的分数
+            "teacher_comment": "TEXT",          # 教师修正后的评语
+        }
+        for col, coltype in migrations.items():
             try:
-                con.execute(f"ALTER TABLE history ADD COLUMN {col} TEXT")
+                con.execute(f"ALTER TABLE history ADD COLUMN {col} {coltype}")
             except Exception:
                 pass
 
 
 def save_result(filename: str, subject: str, result: dict,
-                source: str = "单份批改", batch_id: str = None):
-    init_db()
+                source: str = "单份批改", batch_id: str = None) -> int:
     with _conn() as con:
-        con.execute(
+        cur = con.execute(
             """INSERT INTO history
                (created_at, filename, subject, source, batch_id,
                 score, grade, weak_points, full_result)
@@ -65,10 +74,46 @@ def save_result(filename: str, subject: str, result: dict,
                 json.dumps(result, ensure_ascii=False),
             ),
         )
+        return cur.lastrowid
+
+
+def update_review(record_id: int, new_score: int, new_comment: str):
+    """教师人工复核：用修正后的分数/评语覆盖记录，并保留 AI 原始结果备查。
+
+    等级由分数统一换算；首次复核时把 AI 原始评分存进 full_result 的
+    _ai_original，方便答辩时展示「AI 原评 → 教师修正」的对比。
+    """
+    new_grade = score_to_grade(new_score)
+    with _conn() as con:
+        row = con.execute(
+            "SELECT full_result, reviewed FROM history WHERE id = ?", (record_id,)
+        ).fetchone()
+        if row is None:
+            return
+
+        result = json.loads(row["full_result"])
+        if not row["reviewed"]:
+            result["_ai_original"] = {
+                "score": result.get("score"),
+                "grade": result.get("grade"),
+                "comment": result.get("comment", ""),
+            }
+        result["score"] = new_score
+        result["grade"] = new_grade
+        result["comment"] = new_comment
+        result["reviewed"] = True
+
+        con.execute(
+            """UPDATE history
+               SET score = ?, grade = ?, reviewed = 1,
+                   teacher_score = ?, teacher_comment = ?, full_result = ?
+               WHERE id = ?""",
+            (new_score, new_grade, new_score, new_comment,
+             json.dumps(result, ensure_ascii=False), record_id),
+        )
 
 
 def save_batch_report(batch_id: str, subject: str, report: dict, total: int):
-    init_db()
     with _conn() as con:
         con.execute(
             """INSERT OR REPLACE INTO batch_reports
@@ -85,7 +130,6 @@ def save_batch_report(batch_id: str, subject: str, report: dict, total: int):
 
 
 def get_history(limit: int = 100) -> list[dict]:
-    init_db()
     with _conn() as con:
         rows = con.execute(
             "SELECT * FROM history ORDER BY created_at DESC LIMIT ?", (limit,)
@@ -94,7 +138,6 @@ def get_history(limit: int = 100) -> list[dict]:
 
 
 def get_batch_report(batch_id: str) -> dict | None:
-    init_db()
     with _conn() as con:
         row = con.execute(
             "SELECT * FROM batch_reports WHERE batch_id = ?", (batch_id,)
@@ -107,7 +150,6 @@ def get_batch_report(batch_id: str) -> dict | None:
 
 
 def get_batch_records(batch_id: str) -> list[dict]:
-    init_db()
     with _conn() as con:
         rows = con.execute(
             "SELECT * FROM history WHERE batch_id = ? ORDER BY created_at ASC",
@@ -117,20 +159,21 @@ def get_batch_records(batch_id: str) -> list[dict]:
 
 
 def delete_record(record_id: int):
-    init_db()
     with _conn() as con:
         con.execute("DELETE FROM history WHERE id = ?", (record_id,))
 
 
 def delete_batch(batch_id: str):
-    init_db()
     with _conn() as con:
         con.execute("DELETE FROM history WHERE batch_id = ?", (batch_id,))
         con.execute("DELETE FROM batch_reports WHERE batch_id = ?", (batch_id,))
 
 
 def clear_history():
-    init_db()
     with _conn() as con:
         con.execute("DELETE FROM history")
         con.execute("DELETE FROM batch_reports")
+
+
+# 模块导入时建表 / 迁移一次，避免每次读写都重复执行
+init_db()
