@@ -1,17 +1,17 @@
-import base64
-import os
-from pathlib import Path
+import json
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
+from pathlib import Path
 
 import streamlit as st
 from dotenv import load_dotenv
-from PIL import Image
 
 from grader.essay_grader import grade_essay
 from grader.math_grader import grade_math
+from grader.image_utils import encode_image_bytes
 from grader.database import (save_result, save_batch_report, get_history,
-                              get_batch_report, get_batch_records,
+                              get_batch_report, get_batch_records, update_review,
                               delete_record, delete_batch, clear_history)
 
 load_dotenv()
@@ -185,6 +185,27 @@ with st.sidebar:
         st.session_state.uploader_key += 1
     st.divider()
     st.markdown("**使用说明**\n1. 选择学科\n2. 选择批改模式\n3. 上传作业图片\n4. 点击开始批改")
+
+    # 准确率看板：若已跑过评测（python -m eval.run_eval）则展示指标
+    _report_path = Path(__file__).parent / "eval" / "report.json"
+    if _report_path.exists():
+        try:
+            _rep = json.loads(_report_path.read_text(encoding="utf-8"))
+            st.divider()
+            st.markdown("**📏 批改准确率**")
+            _ga = _rep.get("等级一致率")
+            _mae = _rep.get("分数MAE")
+            _pa = _rep.get("逐题判对一致率")
+            if _ga is not None:
+                st.caption(f"等级一致率　{round(_ga*100,1)}%")
+            if _pa is not None:
+                st.caption(f"逐题判对一致率　{round(_pa*100,1)}%")
+            if _mae is not None:
+                st.caption(f"分数平均误差　{_mae} 分")
+            st.caption(f"基于 {_rep.get('样本数','—')} 份人工标注样本")
+        except Exception:
+            pass
+
     st.divider()
     st.caption("Powered by ZhipuAI GLM-4V")
 
@@ -204,9 +225,7 @@ tab_single, tab_class, tab_history = st.tabs(["📄 单份批改", "👥 班级�
 # 工具函数
 # ═══════════════════════════════════════════════════════
 def encode_image(file):
-    raw = file.getvalue()
-    media_type = "image/png" if file.type == "image/png" else "image/jpeg"
-    return base64.standard_b64encode(raw).decode(), media_type
+    return encode_image_bytes(file.getvalue())
 
 
 def show_grade_badge(grade):
@@ -215,7 +234,7 @@ def show_grade_badge(grade):
     return cls, emoji
 
 
-def render_result(result, subject):
+def render_result(result, subject, record_id=None):
     score = result.get("score")
     grade = result.get("grade", "")
     cls, emoji = show_grade_badge(grade)
@@ -228,17 +247,28 @@ def render_result(result, subject):
   <span class="grade-badge {cls}">{emoji} {grade}</span>
 </div>""", unsafe_allow_html=True)
 
+    if result.get("reviewed"):
+        ai = result.get("_ai_original", {})
+        ai_score = ai.get("score")
+        if ai_score is not None and ai_score != score:
+            st.caption(f"✅ 已人工复核　·　AI 原评 {ai_score} 分 → 教师修正 {score} 分")
+        else:
+            st.caption("✅ 已人工复核")
+
     if subject == "数学" and result.get("problems"):
         st.markdown("**逐题分析**")
         for p in result["problems"]:
             icon = "✅" if p.get("correct") else ("🔶" if p.get("partial_credit") else "❌")
-            with st.expander(f"{icon} {p.get('problem_num','')}"):
+            kp = p.get("knowledge_point")
+            line = f"{icon} **{p.get('problem_num','')}**"
+            if kp:
+                line += f"　·　{kp}"
+            st.markdown(line)
+            if not p.get("correct"):
                 if p.get("error_step"):
-                    st.markdown(f"**出错步骤：** `{p['error_step']}`")
+                    st.markdown(f"　　出错步骤：`{p['error_step']}`")
                 if p.get("error_reason"):
-                    st.markdown(f"**原因：** {p['error_reason']}")
-                if p.get("correct"):
-                    st.success("完全正确！", icon="🎉")
+                    st.markdown(f"　　原因：{p['error_reason']}")
 
     if subject != "数学" and result.get("dimensions"):
         st.markdown("**四维评分**")
@@ -248,9 +278,11 @@ def render_result(result, subject):
             if key in dims:
                 d = dims[key]
                 s = d.get("score",0)
-                with st.expander(f"{emoji2} {label}  —  {s}/25 分"):
-                    st.progress(s/25)
-                    st.write(d.get("comment",""))
+                st.markdown(f"{emoji2} **{label}**　{s}/25 分")
+                st.progress(s/25)
+                cmt = d.get("comment","")
+                if cmt:
+                    st.caption(cmt)
         if result.get("highlight"):
             st.info(f"✨ **亮点句：** {result['highlight']}")
 
@@ -267,6 +299,24 @@ def render_result(result, subject):
     if result.get("suggestions"):
         st.markdown("<br>", unsafe_allow_html=True)
         st.markdown(f'<div class="suggest-box">💡 <strong>改进建议：</strong>{result["suggestions"]}</div>', unsafe_allow_html=True)
+
+    # 人工复核：教师可修正分数与评语（AI 辅助、教师主导）
+    if record_id is not None:
+        st.markdown("<br>", unsafe_allow_html=True)
+        with st.form(f"review_form_{record_id}"):
+            st.markdown("**✏️ 人工复核 / 修正**")
+            new_score = st.number_input(
+                "修正分数", min_value=0, max_value=100,
+                value=int(score) if score is not None else 0, step=1,
+                key=f"rev_score_{record_id}")
+            new_comment = st.text_area(
+                "修正评语", value=result.get("comment", ""),
+                key=f"rev_cmt_{record_id}")
+            submitted = st.form_submit_button("保存复核")
+        if submitted:
+            update_review(record_id, int(new_score), new_comment)
+            st.success("已保存教师复核，分数与评语已更新。")
+            st.rerun()
 
 
 def generate_class_report(results, subject):
@@ -351,7 +401,7 @@ def render_class_report(report, subject):
     # 薄弱知识点排行
     if report["weak_rank"]:
         st.markdown("<br>", unsafe_allow_html=True)
-        st.markdown('<div class="report-title">⚠️ 全班薄弱知识点排行</div>', unsafe_allow_html=True)
+        st.markdown('<div class="report-title">⚠️ 全班薄弱知识点排行（课标对齐）</div>', unsafe_allow_html=True)
         max_cnt = report["weak_rank"][0][1]
         for i,(wp,cnt) in enumerate(report["weak_rank"],1):
             pct = round(cnt/n*100)
@@ -373,7 +423,7 @@ def render_class_report(report, subject):
     # 数学高频错误步骤
     if report["error_rank"]:
         st.markdown("<br>", unsafe_allow_html=True)
-        st.markdown('<div class="report-title">❌ 高频错误步骤（数学）</div>', unsafe_allow_html=True)
+        st.markdown('<div class="report-title">❌ 高频典型错误明细（数学）</div>', unsafe_allow_html=True)
         for step,cnt in report["error_rank"]:
             st.markdown(f"- `{step}` —— **{cnt} 人次**出现此错误")
 
@@ -424,21 +474,36 @@ with tab_class:
         st.info(f"已选择 **{len(uploaded_files)}** 份作业，点击下方按钮开始批量批改。")
 
         if st.button("🚀 开始批量批改", type="primary", use_container_width=True, key="btn_batch"):
-            results = []
-            names   = []
+            names    = [f.name for f in uploaded_files]
+            total    = len(uploaded_files)
+            results  = [None] * total
             batch_id = datetime.now().strftime("%Y%m%d%H%M%S")
             progress_bar = st.progress(0, text="正在批改中…")
 
-            for i, f in enumerate(uploaded_files):
-                progress_bar.progress((i+1)/len(uploaded_files), text=f"正在批改第 {i+1}/{len(uploaded_files)} 份…")
-                b64, mt = encode_image(f)
-                r = grade_math(b64,mt) if subject=="数学" else grade_essay(b64,subject,mt)
-                save_result(f.name, subject, r, source="班级批改", batch_id=batch_id)
-                results.append(r)
-                names.append(f.name)
+            def _grade_one(f):
+                try:
+                    b64, mt = encode_image(f)
+                    return grade_math(b64, mt) if subject == "数学" else grade_essay(b64, subject, mt)
+                except Exception as e:
+                    return {"score": None, "grade": "批改失败",
+                            "comment": f"无法处理该图片：{e}",
+                            "weak_points": [], "suggestions": ""}
+
+            # 并发批改：API 调用是 I/O 密集，最多同时跑 6 个，按原始顺序回填结果
+            with ThreadPoolExecutor(max_workers=min(6, total)) as ex:
+                future_to_idx = {ex.submit(_grade_one, f): i for i, f in enumerate(uploaded_files)}
+                done = 0
+                for fut in as_completed(future_to_idx):
+                    results[future_to_idx[fut]] = fut.result()
+                    done += 1
+                    progress_bar.progress(done / total, text=f"已完成 {done}/{total} 份…")
+
+            # 数据库写入放在主线程顺序执行（SQLite 单线程更稳妥）
+            for name, r in zip(names, results):
+                save_result(name, subject, r, source="班级批改", batch_id=batch_id)
 
             progress_bar.empty()
-            st.success(f"批改完成！共处理 {len(results)} 份作业。")
+            st.success(f"批改完成！共处理 {total} 份作业。")
 
             # 班级学情报告
             report = generate_class_report(results, subject)
@@ -461,8 +526,6 @@ with tab_class:
 # Tab 3：历史记录
 # ═══════════════════════════════════════════════════════
 with tab_history:
-    import json as _json
-
     records = get_history()
 
     if not records:
@@ -503,12 +566,15 @@ with tab_history:
                         render_class_report(batch_rep["report_json"], rec["subject"])
                     st.divider()
                     st.markdown("**逐份详情**")
+                    # 已在 batch 这一层 expander 内，逐份只能内联渲染（expander 不可嵌套）
                     for br in batch_recs:
                         s   = br["score"] if br["score"] is not None else "—"
                         g   = br["grade"] or ""
                         dot = grade_color.get(g, "⚪")
-                        with st.expander(f"{dot} {br['filename']}　{s} 分　{g}", key=f"br_{br['id']}"):
-                            render_result(_json.loads(br["full_result"]), br["subject"])
+                        st.markdown(f"##### {dot} {br['filename']}　{s} 分　{g}")
+                        render_result(json.loads(br["full_result"]), br["subject"],
+                                      record_id=br["id"])
+                        st.divider()
                     if st.button("删除此次班级批改", key=f"del_batch_{batch_id}"):
                         delete_batch(batch_id)
                         st.rerun()
@@ -519,8 +585,8 @@ with tab_history:
                 grade = rec["grade"] or ""
                 dot   = grade_color.get(grade, "⚪")
                 with st.expander(f"📄 {dot} {rec['created_at']}　{rec['filename']}　{rec['subject']}　**{score} 分**　{grade}"):
-                    result = _json.loads(rec["full_result"])
-                    render_result(result, rec["subject"])
+                    result = json.loads(rec["full_result"])
+                    render_result(result, rec["subject"], record_id=rec["id"])
                     if st.button("删除此条", key=f"del_{rec['id']}"):
                         delete_record(rec["id"])
                         st.rerun()
