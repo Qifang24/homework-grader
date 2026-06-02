@@ -234,14 +234,20 @@ def show_grade_badge(grade):
     return cls, emoji
 
 
-def render_result(result, subject, record_id=None):
+def render_result(result, subject, record_id=None, form_ns=""):
     score = result.get("score")
     grade = result.get("grade", "")
     cls, emoji = show_grade_badge(grade)
 
+    student = (result.get("student_name") or "").strip()
+    klass = (result.get("class_name") or "").strip()
+    who = student or "未识别姓名"
+    meta = f"{who}　·　{klass}" if klass else who
+
     st.markdown('<div class="result-header"><h2>批改结果</h2></div>', unsafe_allow_html=True)
     st.markdown(f"""
 <div class="score-block">
+  <div style="color:#2d3561;font-weight:700;font-size:1.05rem;margin-bottom:.5rem">👤 {meta}</div>
   <div style="color:#6b7280;font-size:.85rem;margin-bottom:.2rem">综合得分</div>
   <div class="score-number">{score if score is not None else "--"} <span style="font-size:1.5rem;-webkit-text-fill-color:#6b7280">分</span></div>
   <span class="grade-badge {cls}">{emoji} {grade}</span>
@@ -303,19 +309,31 @@ def render_result(result, subject, record_id=None):
     # 人工复核：教师可修正分数与评语（AI 辅助、教师主导）
     if record_id is not None:
         st.markdown("<br>", unsafe_allow_html=True)
-        with st.form(f"review_form_{record_id}"):
+        with st.form(f"review_form_{form_ns}{record_id}"):
             st.markdown("**✏️ 人工复核 / 修正**")
+            ncol1, ncol2 = st.columns(2)
+            with ncol1:
+                new_student = st.text_input(
+                    "学生姓名", value=student,
+                    placeholder="AI 未识别，请补填",
+                    key=f"rev_name_{form_ns}{record_id}")
+            with ncol2:
+                new_class = st.text_input(
+                    "班级", value=klass,
+                    placeholder="如 三年级二班",
+                    key=f"rev_class_{form_ns}{record_id}")
             new_score = st.number_input(
                 "修正分数", min_value=0, max_value=100,
                 value=int(score) if score is not None else 0, step=1,
-                key=f"rev_score_{record_id}")
+                key=f"rev_score_{form_ns}{record_id}")
             new_comment = st.text_area(
                 "修正评语", value=result.get("comment", ""),
-                key=f"rev_cmt_{record_id}")
+                key=f"rev_cmt_{form_ns}{record_id}")
             submitted = st.form_submit_button("保存复核")
         if submitted:
-            update_review(record_id, int(new_score), new_comment)
-            st.success("已保存教师复核，分数与评语已更新。")
+            update_review(record_id, int(new_score), new_comment,
+                          new_student.strip(), new_class.strip())
+            st.success("已保存教师复核，姓名 / 分数 / 评语已更新。")
             st.rerun()
 
 
@@ -453,8 +471,8 @@ with tab_single:
                 b64, mt = encode_image(uploaded_file)
                 with st.spinner("AI 正在批改中，请稍候…"):
                     result = grade_math(b64,mt) if subject=="数学" else grade_essay(b64,subject,mt)
-                save_result(uploaded_file.name, subject, result)
-                render_result(result, subject)
+                rid = save_result(uploaded_file.name, subject, result)
+                render_result(result, subject, record_id=rid, form_ns="single_")
 
 
 # ═══════════════════════════════════════════════════════
@@ -531,62 +549,99 @@ with tab_history:
     if not records:
         st.info("还没有批改记录，去单份批改或班级批改试试吧。")
     else:
-        col_info, col_clear = st.columns([3, 1])
-        with col_info:
-            st.markdown(f"共 **{len(records)}** 条记录，最新在最上方")
-        with col_clear:
-            if st.button("🗑️ 清空历史", type="secondary"):
+        def _name_of(rec):
+            return (rec.get("student_name") or "").strip() or "未识别姓名"
+
+        # ── 分类筛选：按学科 / 按学生查看 ──
+        subjects = sorted({r["subject"] for r in records})
+        students = sorted({(r.get("student_name") or "").strip()
+                           for r in records if (r.get("student_name") or "").strip()})
+
+        fcol1, fcol2, fcol3 = st.columns([2, 2, 1])
+        with fcol1:
+            f_subject = st.selectbox("📂 按学科", ["全部"] + subjects, key="hist_subj")
+        with fcol2:
+            f_student = st.selectbox("👤 按学生", ["全部"] + students, key="hist_stu")
+        with fcol3:
+            st.markdown("<div style='height:1.7rem'></div>", unsafe_allow_html=True)
+            if st.button("🗑️ 清空历史", type="secondary", use_container_width=True):
                 clear_history()
                 st.rerun()
 
         st.divider()
 
         grade_color = {"优秀":"🟢","良好":"🔵","合格":"🟡","待改进":"🔴"}
-        shown_batches = set()
 
-        for rec in records:
-            source   = rec.get("source", "单份批改")
-            batch_id = rec.get("batch_id")
-
-            # 班级批改：按 batch_id 分组，只渲染一次
-            if source == "班级批改" and batch_id:
-                if batch_id in shown_batches:
-                    continue
-                shown_batches.add(batch_id)
-
-                batch_recs = get_batch_records(batch_id)
-                batch_rep  = get_batch_report(batch_id)
-                n          = len(batch_recs)
-                scores     = [r["score"] for r in batch_recs if r["score"] is not None]
-                avg        = round(sum(scores)/len(scores), 1) if scores else "—"
-                created_at = batch_recs[0]["created_at"] if batch_recs else rec["created_at"]
-
-                with st.expander(f"👥 {created_at}　班级批改　{rec['subject']}　共 {n} 份　平均 {avg} 分"):
-                    if batch_rep:
-                        render_class_report(batch_rep["report_json"], rec["subject"])
-                    st.divider()
-                    st.markdown("**逐份详情**")
-                    # 已在 batch 这一层 expander 内，逐份只能内联渲染（expander 不可嵌套）
-                    for br in batch_recs:
-                        s   = br["score"] if br["score"] is not None else "—"
-                        g   = br["grade"] or ""
-                        dot = grade_color.get(g, "⚪")
-                        st.markdown(f"##### {dot} {br['filename']}　{s} 分　{g}")
-                        render_result(json.loads(br["full_result"]), br["subject"],
-                                      record_id=br["id"])
-                        st.divider()
-                    if st.button("删除此次班级批改", key=f"del_batch_{batch_id}"):
-                        delete_batch(batch_id)
-                        st.rerun()
-
-            # 单份批改
-            else:
+        # ── 选定某个学生：扁平列出该生全部作业（跨单份 / 班级），方便逐人查看 ──
+        if f_student != "全部":
+            matched = [r for r in records
+                       if (r.get("student_name") or "").strip() == f_student
+                       and (f_subject == "全部" or r["subject"] == f_subject)]
+            st.markdown(f"👤 **{f_student}** 的作业，共 **{len(matched)}** 条")
+            for rec in matched:
                 score = rec["score"] if rec["score"] is not None else "—"
                 grade = rec["grade"] or ""
                 dot   = grade_color.get(grade, "⚪")
-                with st.expander(f"📄 {dot} {rec['created_at']}　{rec['filename']}　{rec['subject']}　**{score} 分**　{grade}"):
-                    result = json.loads(rec["full_result"])
-                    render_result(result, rec["subject"], record_id=rec["id"])
+                src   = rec.get("source", "单份批改")
+                with st.expander(f"{dot} {rec['created_at']}　{rec['subject']}　**{score} 分**　{grade}　·　{src}"):
+                    render_result(json.loads(rec["full_result"]), rec["subject"],
+                                  record_id=rec["id"])
                     if st.button("删除此条", key=f"del_{rec['id']}"):
                         delete_record(rec["id"])
                         st.rerun()
+
+        # ── 默认时间线视图（班级批改按 batch 分组），可按学科筛选 ──
+        else:
+            visible = [r for r in records
+                       if f_subject == "全部" or r["subject"] == f_subject]
+            if not visible:
+                st.info("没有符合筛选条件的记录。")
+            st.markdown(f"共 **{len(visible)}** 条记录，最新在最上方")
+            shown_batches = set()
+
+            for rec in visible:
+                source   = rec.get("source", "单份批改")
+                batch_id = rec.get("batch_id")
+
+                # 班级批改：按 batch_id 分组，只渲染一次
+                if source == "班级批改" and batch_id:
+                    if batch_id in shown_batches:
+                        continue
+                    shown_batches.add(batch_id)
+
+                    batch_recs = get_batch_records(batch_id)
+                    batch_rep  = get_batch_report(batch_id)
+                    n          = len(batch_recs)
+                    scores     = [r["score"] for r in batch_recs if r["score"] is not None]
+                    avg        = round(sum(scores)/len(scores), 1) if scores else "—"
+                    created_at = batch_recs[0]["created_at"] if batch_recs else rec["created_at"]
+
+                    with st.expander(f"👥 {created_at}　班级批改　{rec['subject']}　共 {n} 份　平均 {avg} 分"):
+                        if batch_rep:
+                            render_class_report(batch_rep["report_json"], rec["subject"])
+                        st.divider()
+                        st.markdown("**逐份详情**")
+                        # 已在 batch 这一层 expander 内，逐份只能内联渲染（expander 不可嵌套）
+                        for br in batch_recs:
+                            s   = br["score"] if br["score"] is not None else "—"
+                            g   = br["grade"] or ""
+                            dot = grade_color.get(g, "⚪")
+                            st.markdown(f"##### {dot} 👤 {_name_of(br)}　{s} 分　{g}")
+                            render_result(json.loads(br["full_result"]), br["subject"],
+                                          record_id=br["id"])
+                            st.divider()
+                        if st.button("删除此次班级批改", key=f"del_batch_{batch_id}"):
+                            delete_batch(batch_id)
+                            st.rerun()
+
+                # 单份批改
+                else:
+                    score = rec["score"] if rec["score"] is not None else "—"
+                    grade = rec["grade"] or ""
+                    dot   = grade_color.get(grade, "⚪")
+                    with st.expander(f"📄 {dot} 👤 {_name_of(rec)}　{rec['subject']}　**{score} 分**　{grade}　·　{rec['created_at']}"):
+                        result = json.loads(rec["full_result"])
+                        render_result(result, rec["subject"], record_id=rec["id"])
+                        if st.button("删除此条", key=f"del_{rec['id']}"):
+                            delete_record(rec["id"])
+                            st.rerun()

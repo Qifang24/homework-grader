@@ -8,6 +8,8 @@ ESSAY_PROMPT_TEMPLATE = """你是一位专业的{subject}老师，请批改这�
 
 请严格按照以下JSON格式输出，不要输出任何其他内容：
 {{
+    "student_name": "作业上手写的学生姓名（通常在顶部“姓名/Name”后面），辨认不出就填空字符串",
+    "class_name": "作业上手写的班级（如“四年级一班”），辨认不出就填空字符串",
     "dimensions": {{
         "theme": {{
             "score": 数字(0-25),
@@ -36,7 +38,8 @@ ESSAY_PROMPT_TEMPLATE = """你是一位专业的{subject}老师，请批改这�
 1. 仔细识别手写内容，包括涂改和潦草字迹
 2. 四个维度各25分，每个维度独立打分
 3. 评语必须引用作文中的具体句子，体现个性化
-4. weak_points 必须严格从给定列表中选择，不要自创"""
+4. weak_points 必须严格从给定列表中选择，不要自创
+5. student_name / class_name 据实从图片识别，认不出就留空，禁止编造"""
 
 
 def _calculate_score(dimensions: dict) -> tuple[int, str]:
@@ -62,6 +65,10 @@ def grade_essay(image_b64: str, subject: str = "语文", media_type: str = "imag
             "weak_points": [],
             "suggestions": "",
         }
+
+    # 学生身份：模型从图片识别，去掉首尾空白；认不出则为空，留给老师复核
+    result["student_name"] = (result.get("student_name") or "").strip()
+    result["class_name"] = (result.get("class_name") or "").strip()
 
     # 把薄弱点对齐到课标列表，去重后保留顺序
     aligned, seen = [], set()

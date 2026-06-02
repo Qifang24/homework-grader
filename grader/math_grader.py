@@ -12,6 +12,8 @@ MATH_PROMPT_TEMPLATE = """你是一位专业的数学老师，请批改这份学
 
 请严格按照以下JSON格式输出，不要输出任何其他内容：
 {{
+    "student_name": "作业上手写的学生姓名（通常在顶部“姓名”后面），辨认不出就填空字符串",
+    "class_name": "作业上手写的班级（如“三年级二班”），辨认不出就填空字符串",
     "problems": [
         {{
             "problem_num": "第X题",
@@ -30,7 +32,8 @@ MATH_PROMPT_TEMPLATE = """你是一位专业的数学老师，请批改这份学
 1. 对每道题的每一步：先独立计算正确结果，再与学生写的数字比对，不一致即为出错
 2. 部分正确也要标记（partial_credit: true），但最终答案错误不能标记 correct: true
 3. 评语必须引用学生具体的错误数字，不能是通用模板
-4. knowledge_point 必须严格从给定列表中选择，不要自创"""
+4. knowledge_point 必须严格从给定列表中选择，不要自创
+5. student_name / class_name 据实从图片识别，认不出就留空，禁止编造"""
 
 MATH_PROMPT = MATH_PROMPT_TEMPLATE.format(knowledge_points=format_for_prompt("数学"))
 
@@ -75,6 +78,10 @@ def grade_math(image_b64: str, media_type: str = "image/jpeg") -> dict:
             "weak_points": [],
             "suggestions": "",
         }
+
+    # 学生身份：模型从图片识别，去掉首尾空白；认不出则为空，留给老师复核
+    result["student_name"] = (result.get("student_name") or "").strip()
+    result["class_name"] = (result.get("class_name") or "").strip()
 
     # 把每道题的知识点对齐到课标列表，避免模型自创导致无法聚合
     problems = result.get("problems", [])
