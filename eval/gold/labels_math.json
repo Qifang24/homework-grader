@@ -1,0 +1,38 @@
+{
+  "_说明": "数学人工标注真值。由人工核对【教师答案页(红笔标准答案)】与【学生页】逐题判定学生实际对错，独立于本系统的任何模型输出，作为准确率评测的 ground truth。total=该卷题数，wrong=学生实际答错的题号列表。",
+  "courselearn_21": {
+    "subject": "数学",
+    "total": 15,
+    "wrong": [],
+    "true_score": 100,
+    "note": "有理数乘除·选择填空，学生全对（对照教师答案页逐题核对）"
+  },
+  "hardwork_117": {
+    "subject": "数学",
+    "total": 9,
+    "wrong": [6],
+    "true_score": 89,
+    "note": "约分通分。第6题(3)学生写 b-a，标准答案 1/(b-a)，判错；其余全对"
+  },
+  "hardwork_127": {
+    "subject": "数学",
+    "total": 9,
+    "wrong": [],
+    "true_score": 100,
+    "note": "分式基本性质。学生全对"
+  },
+  "83_student_2": {
+    "subject": "数学",
+    "total": 8,
+    "wrong": [],
+    "true_score": 100,
+    "note": "特殊角三角函数。学生全对"
+  },
+  "89_student_2": {
+    "subject": "数学",
+    "total": 4,
+    "wrong": [],
+    "true_score": 100,
+    "note": "解直角三角形应用。学生全对"
+  }
+}

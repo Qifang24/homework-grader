@@ -13,7 +13,7 @@ def test_get_knowledge_points():
 def test_format_for_prompt_numbered():
     text = format_for_prompt("数学")
     assert text.startswith("1. 整数四则运算")
-    assert "12. 找规律" in text
+    assert "19. 锐角三角函数" in text
 
 
 def test_normalize_exact_match():

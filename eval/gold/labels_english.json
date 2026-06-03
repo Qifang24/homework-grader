@@ -1,0 +1,9 @@
+{
+  "_说明": "英语客观题人工标注真值。由人工核对教师答案页(红笔)与学生页逐项判定。这些样本学生水平较高，绝大多数作答正确，仅含少量真实错误。total=系统切分出的作答点数，true_wrong=学生确实答错的项（用内容描述），false_flags=系统判错但学生其实对的项（系统误判）。",
+  "page_9":   {"total": 28, "true_wrong": [], "false_flags": [], "note": "Unit2 词汇/短语/句式，学生全对"},
+  "page_16":  {"total": 10, "true_wrong": [], "false_flags": [], "note": "选择题10道，全对"},
+  "page_27":  {"total": 11, "true_wrong": [], "false_flags": [], "note": "阅读理解简答+完成句子，全对"},
+  "page_29":  {"total": 17, "true_wrong": ["#1 She play→plays 漏第三人称-s"], "false_flags": ["一 do否定式：学生写全 do/does/don't/doesn't，系统漏看 don't 误判错"], "note": "真实错1处；系统另有1处误判(漏读)"},
+  "page_74":  {"total": 7,  "true_wrong": [], "false_flags": [], "note": "完形填空7空，全对"},
+  "page_103": {"total": 13, "true_wrong": ["#2 a cake→the cake 冠词错"], "false_flags": [], "note": "补全对话/音标/语调，真实错1处"}
+}
