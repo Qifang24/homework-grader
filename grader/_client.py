@@ -13,6 +13,9 @@ from dotenv import load_dotenv
 load_dotenv()
 
 MODEL = "glm-4.6v"
+# 低 temperature：让同一张图的批改结果尽量可复现，减少逐题判定的随机抖动。
+# 注意它只解决"结果飘"，识别准不准主要靠图片清晰度（见 image_utils.MAX_DIM）。
+TEMPERATURE = 0.1
 
 # 等级阈值：从高到低，第一个满足的即为结果
 GRADE_THRESHOLDS = [(90, "优秀"), (75, "良好"), (60, "合格")]
@@ -72,7 +75,7 @@ def get_grading_json(image_b64: str, prompt: str,
     for attempt in range(retries + 1):
         try:
             response = _get_client().chat.completions.create(
-                model=MODEL, messages=messages)
+                model=MODEL, messages=messages, temperature=TEMPERATURE)
             last_raw = response.choices[0].message.content
         except Exception as e:  # 网络/接口错误
             if attempt == retries:
@@ -84,6 +87,41 @@ def get_grading_json(image_b64: str, prompt: str,
         if parsed is not None:
             return parsed
         if attempt < retries:  # 输出无法解析，再试一次
+            time.sleep(1)
+
+    return {"_raw": last_raw}
+
+
+def get_grading_json_multi(images: list, prompt: str, retries: int = 2) -> dict:
+    """同 get_grading_json，但一次传多张图片（如教师页+学生页）。
+
+    images: [(image_b64, media_type), ...]，按列表顺序作为图 1、图 2… 传给模型。
+    解析与重试策略完全沿用单图版本。
+    """
+    last_raw = ""
+    content = [
+        {"type": "image_url",
+         "image_url": {"url": f"data:{mt};base64,{b64}"}}
+        for b64, mt in images
+    ]
+    content.append({"type": "text", "text": prompt})
+    messages = [{"role": "user", "content": content}]
+
+    for attempt in range(retries + 1):
+        try:
+            response = _get_client().chat.completions.create(
+                model=MODEL, messages=messages, temperature=TEMPERATURE)
+            last_raw = response.choices[0].message.content
+        except Exception as e:
+            if attempt == retries:
+                return {"_raw": f"模型调用失败：{e}"}
+            time.sleep(2 ** attempt)
+            continue
+
+        parsed = parse_json_response(last_raw)
+        if parsed is not None:
+            return parsed
+        if attempt < retries:
             time.sleep(1)
 
     return {"_raw": last_raw}

@@ -8,7 +8,7 @@ from io import BytesIO
 
 from PIL import Image
 
-MAX_DIM = 1600
+MAX_DIM = 2048
 
 
 def encode_image_bytes(raw: bytes, max_dim: int = MAX_DIM) -> tuple[str, str]:

@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 
 from grader.essay_grader import grade_essay
 from grader.math_grader import grade_math
+from grader.answer_key_grader import grade_with_key
 from grader.image_utils import encode_image_bytes
 from grader.database import (save_result, save_batch_report, get_history,
                               get_batch_report, get_batch_records, update_review,
@@ -179,7 +180,12 @@ hr { border-color:#e8eaf6; margin:1.2rem 0; }
 # ── 侧边栏 ──────────────────────────────────────────────
 with st.sidebar:
     st.markdown("## 📚 批改设置")
-    subject = st.selectbox("选择学科", ["数学", "语文作文", "英语作文"])
+    subject = st.selectbox(
+        "选择学科",
+        ["数学", "语文", "英语", "语文作文", "英语作文"],
+        help="语文 / 英语：阅读、词汇、填空等客观题，用「对照标准答案」批改；"
+             "语文作文 / 英语作文：按四维度批改作文。",
+    )
     if subject != st.session_state.current_subject:
         st.session_state.current_subject = subject
         st.session_state.uploader_key += 1
@@ -261,7 +267,22 @@ def render_result(result, subject, record_id=None, form_ns=""):
         else:
             st.caption("✅ 已人工复核")
 
-    if subject == "数学" and result.get("problems"):
+    # 对照标准答案模式：逐题列出 学生答案 ↔ 标准答案
+    if result.get("grading_mode") == "answer_key" and result.get("problems"):
+        probs = result["problems"]
+        correct_n = sum(1 for p in probs if p.get("correct"))
+        st.markdown(f"**逐题对照**　·　答对 {correct_n} / {len(probs)} 题")
+        for p in probs:
+            icon = "✅" if p.get("correct") else "❌"
+            num  = p.get("problem_num", "")
+            sa   = (p.get("student_answer") or "").strip() or "（未作答）"
+            ca   = (p.get("correct_answer") or "").strip() or "—"
+            if p.get("correct"):
+                st.markdown(f"{icon} **{num}**　学生：`{sa}`")
+            else:
+                st.markdown(f"{icon} **{num}**　学生：`{sa}`　→　正确：`{ca}`")
+
+    elif subject == "数学" and result.get("problems"):
         st.markdown("**逐题分析**")
         for p in result["problems"]:
             icon = "✅" if p.get("correct") else ("🔶" if p.get("partial_credit") else "❌")
@@ -276,7 +297,7 @@ def render_result(result, subject, record_id=None, form_ns=""):
                 if p.get("error_reason"):
                     st.markdown(f"　　原因：{p['error_reason']}")
 
-    if subject != "数学" and result.get("dimensions"):
+    if result.get("grading_mode") != "answer_key" and subject != "数学" and result.get("dimensions"):
         st.markdown("**四维评分**")
         dims = result["dimensions"]
         dim_labels = {"theme":("主题","🎯"),"structure":("结构","🏗️"),"language":("语言","✍️"),"content":("内容","💡")}
@@ -456,23 +477,55 @@ def render_class_report(report, subject):
 # Tab 1：单份批改
 # ═══════════════════════════════════════════════════════
 with tab_single:
+    use_key = st.checkbox(
+        "📑 对照标准答案批改（再上传一张教师页/答案页 —— 适合选择题、填空题、词汇练习等客观题）",
+        key="use_key_single",
+    )
+
     uploaded_file = st.file_uploader(
-        "上传作业图片（支持 JPG / PNG）",
+        "上传学生作业图片（支持 JPG / PNG）",
         type=["jpg","jpeg","png"], key=f"single_{st.session_state.uploader_key}",
         label_visibility="collapsed",
     )
+    teacher_file = None
+    if use_key:
+        teacher_file = st.file_uploader(
+            "上传教师页 / 标准答案图片",
+            type=["jpg","jpeg","png"], key=f"single_key_{st.session_state.uploader_key}",
+        )
+
     if uploaded_file:
         col_img, col_result = st.columns([1,1], gap="large")
         with col_img:
-            st.markdown('<div style="font-weight:700;color:#2d3561;margin-bottom:.5rem">🖼️ 作业原图</div>', unsafe_allow_html=True)
+            st.markdown('<div style="font-weight:700;color:#2d3561;margin-bottom:.5rem">🖼️ 学生作业原图</div>', unsafe_allow_html=True)
             st.image(uploaded_file, use_container_width=True)
+            if use_key and teacher_file:
+                st.markdown('<div style="font-weight:700;color:#2d3561;margin:.8rem 0 .5rem">📑 教师页 / 标准答案</div>', unsafe_allow_html=True)
+                st.image(teacher_file, use_container_width=True)
         with col_result:
+            if use_key and not teacher_file:
+                st.warning("已勾选对照模式，请再上传一张「教师页 / 标准答案」图片。")
             if st.button("🚀 开始批改", type="primary", use_container_width=True, key="btn_single"):
                 b64, mt = encode_image(uploaded_file)
-                with st.spinner("AI 正在批改中，请稍候…"):
-                    result = grade_math(b64,mt) if subject=="数学" else grade_essay(b64,subject,mt)
-                rid = save_result(uploaded_file.name, subject, result)
-                render_result(result, subject, record_id=rid, form_ns="single_")
+                result = None
+                # 语文 / 英语为客观题学科，必须对照标准答案；否则引导用户
+                if subject in ("语文", "英语") and not (use_key and teacher_file):
+                    st.error(
+                        "「语文 / 英语」用于阅读、词汇、填空等客观题，"
+                        "请勾选上方「📑 对照标准答案批改」并上传教师页；\n\n"
+                        "若要批改作文，请在左侧学科改选「语文作文 / 英语作文」。")
+                else:
+                    with st.spinner("AI 正在批改中，请稍候…"):
+                        if use_key and teacher_file:
+                            tb64, tmt = encode_image(teacher_file)
+                            result = grade_with_key(b64, tb64, subject, mt, tmt)
+                        elif subject == "数学":
+                            result = grade_math(b64, mt)
+                        else:
+                            result = grade_essay(b64, subject, mt)
+                if result is not None:
+                    rid = save_result(uploaded_file.name, subject, result)
+                    render_result(result, subject, record_id=rid, form_ns="single_")
 
 
 # ═══════════════════════════════════════════════════════

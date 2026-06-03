@@ -21,3 +21,9 @@ test_homework.png
 test_essay.png
 项目说明文档.md
 项目说明文档.docx
+
+# 决赛真实测评数据与本地临时脚本（含学生作业，严禁入库）
+eval_data/
+测评数据/
+测评数据.zip
+/_*.py
