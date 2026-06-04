@@ -536,11 +536,14 @@ with tab_single:
                     st.session_state.single_result = result
                     st.session_state.single_rid = save_result(uploaded_file.name, subject, result)
                     st.session_state.single_subject = subject
+                    st.session_state.single_file = uploaded_file.name
 
-            # 渲染批改结果（放在按钮块外：复核保存后 rerun 仍能显示更新后的结果）
-            if st.session_state.get("single_result") is not None:
-                render_result(st.session_state.single_result,
-                              st.session_state.get("single_subject", subject),
+            # 渲染批改结果（按钮块外）：仅当结果属于「当前学科 + 当前这张图」时才显示，
+            # 避免换学科 / 换图后还没批改就残留上一份的分数；复核保存后仍能正常刷新。
+            if (st.session_state.get("single_result") is not None
+                    and st.session_state.get("single_subject") == subject
+                    and st.session_state.get("single_file") == uploaded_file.name):
+                render_result(st.session_state.single_result, subject,
                               record_id=st.session_state.get("single_rid"),
                               form_ns="single_")
 
