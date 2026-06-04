@@ -11,6 +11,7 @@ from grader.essay_grader import grade_essay
 from grader.math_grader import grade_math
 from grader.answer_key_grader import grade_with_key
 from grader.image_utils import encode_image_bytes
+from grader._client import score_to_grade
 from grader.database import (save_result, save_batch_report, get_history,
                               get_batch_report, get_batch_records, update_review,
                               delete_record, delete_batch, clear_history)
@@ -354,6 +355,13 @@ def render_result(result, subject, record_id=None, form_ns=""):
         if submitted:
             update_review(record_id, int(new_score), new_comment,
                           new_student.strip(), new_class.strip())
+            # 同步更新内存中的 result，使单份批改视图 rerun 后立即显示修正结果
+            result["score"] = int(new_score)
+            result["grade"] = score_to_grade(int(new_score))
+            result["comment"] = new_comment
+            result["student_name"] = new_student.strip()
+            result["class_name"] = new_class.strip()
+            result["reviewed"] = True
             st.success("已保存教师复核，姓名 / 分数 / 评语已更新。")
             st.rerun()
 
@@ -524,8 +532,17 @@ with tab_single:
                         else:
                             result = grade_essay(b64, subject, mt)
                 if result is not None:
-                    rid = save_result(uploaded_file.name, subject, result)
-                    render_result(result, subject, record_id=rid, form_ns="single_")
+                    # 结果存入 session_state，保证复核保存触发 rerun 后仍能显示
+                    st.session_state.single_result = result
+                    st.session_state.single_rid = save_result(uploaded_file.name, subject, result)
+                    st.session_state.single_subject = subject
+
+            # 渲染批改结果（放在按钮块外：复核保存后 rerun 仍能显示更新后的结果）
+            if st.session_state.get("single_result") is not None:
+                render_result(st.session_state.single_result,
+                              st.session_state.get("single_subject", subject),
+                              record_id=st.session_state.get("single_rid"),
+                              form_ns="single_")
 
 
 # ═══════════════════════════════════════════════════════
